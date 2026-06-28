@@ -1,0 +1,9 @@
+
+
+# Load bootloader symbols
+set confirm off
+    add-symbol-file C:/Users/jmari/CLionProjects/emulated_wiimote/build/bootloader/bootloader.elf
+set confirm on
+
+# Load application symbols
+file C:/Users/jmari/CLionProjects/emulated_wiimote/build/emulated_wiimote.elf
