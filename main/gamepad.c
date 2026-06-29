@@ -143,12 +143,17 @@ static i2c_master_bus_handle_t i2c_init() {
     };
     i2c_master_bus_handle_t bus_handle;
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &bus_handle));
+    vTaskDelay(pdMS_TO_TICKS(100));
     ESP_LOGI(TAG, "MPU-6050 initialized");
     return bus_handle;
 }
 
 void gamepad_init()
 {
+    // Acceleration
+    i2c_master_bus_handle_t bus = i2c_init();
+    ESP_ERROR_CHECK(accel_init(&accel_device, bus, ACCEL_RANGE_2G));
+
     const int btn_pins[] = {
             BUTTON_UP, BUTTON_DOWN, BUTTON_LEFT, BUTTON_RIGHT,
             BUTTON_A, BUTTON_B,
@@ -161,9 +166,6 @@ void gamepad_init()
         gpio_set_direction(btn_pins[i], GPIO_MODE_INPUT);
         gpio_set_pull_mode(btn_pins[i], GPIO_PULLUP_ONLY);
     }
-    // Acceleration
-    i2c_master_bus_handle_t bus = i2c_init();
-    ESP_ERROR_CHECK(accel_init(&accel_device, bus, ACCEL_RANGE_2G));
 
     // LED
     gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);

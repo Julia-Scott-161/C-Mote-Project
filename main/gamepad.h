@@ -38,7 +38,7 @@
 //------------------- Definitions: Acceleration -------------------//
 //#define I2C_PORT    I2C_NUM_0
 #define I2C_SDA     4
-#define I2C_SCL     23
+#define I2C_SCL     22
 //#define ACCEL_ADDRESS_LOW 0x68  // AD0 low (connected to GND)
 //#define ACCEL_POWER_CTRL_1  0x6B
 #define ACCEL_OUTPUT  0x3B
