@@ -24,7 +24,8 @@
 #include "gamepad.h"
 
 static const char *TAG = "main";
-static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
+//static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
+static const char device_name[] = "Cmote"; //unoffical name
 
 // ---------- HID Descriptor ---------- //
 static uint8_t HIDD[] = {
