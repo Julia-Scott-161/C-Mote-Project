@@ -3,7 +3,6 @@
  * While the original wiimote uses a ADXL330, this code is
  * written to be used with an MPU_6050 Accelerometer Driver.
  *
- *
  * Author: Julia Scott (Julia-Scott-161)
  */
 

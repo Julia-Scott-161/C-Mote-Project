@@ -1,9 +1,27 @@
 /**
+ * Written in parallel with gamepad.rs in the RustRemote project
+ * RustRemote: (https://github.com/Julia-Scott-161/RustRemote.git)
+ *
+ * Functions as the input side of CMote: The button GPIOs, the MPU-6050
+ * accelerometer, the connection-statis LED, and building/sending Bluetooth
+ * HID reports.
+ *
+ * Two FreeRTOS task live here:
+ * 1: LED_task - started once at gamepad_init() and left running for the
+    *  program's lifetime.
+ * 2: gamepad_task - the polling loop, started/stopped based on Bluetooth
+    * connection through gamepad_task_start/gamepad_task_stop so that
+    * it doesn't send reports into the void while disconnected.
+ *
+ * "buffer" holds the most recent report and is guarded by "mutex" so
+ * gamepad_task (the writer), and send_gamepad_last_report (reader) can't
+ * race.
+ *
  * Author: Julia Scott (Julia-Scott-161)
  */
 
 #include "gamepad.h"
-static const char *TAG = "gamepad";
+static const char *TAG = "gamepad"; //for ESP_LOG
 static accel_t accel_device;
 
 static volatile bool     connection = false;
@@ -11,25 +29,107 @@ static SemaphoreHandle_t mutex     = NULL;
 static TaskHandle_t      handle_task  = NULL;
 static uint8_t           buffer[GAMEPAD_REPORT_SIZE] = {0};
 
-
+// ---------- Connection State ---------- //
+/**
+ * flips the status of a "connection" boolean to true or false
+ * based on if the esp has successfully been connected to a host.
+ * Mainly used for the LED task.
+ * @param status true or false based of connection status
+ */
 void gamepad_set_connected(bool status)
 {
     connection = status;
 }
 
-void send_gamepad_report(uint16_t buttons)
+/**
+ * Converts a g-value into the Wiimote-style 10-bit unsigned range.
+ * Clamped on both end so that a large negative float wraps to 0
+ * instead of to large number.
+ * @param value the number that is being converted.
+ * @return the value converted to a 10-bit unsigned range.
+ */
+static inline uint16_t to_10bit(float value) {
+    int32_t scaled = (int32_t) (value * 170.0f + 512.0f);
+    if (scaled < 0) {
+        scaled = 0;
+    }
+    if (scaled > 1023) {
+        scaled = 1023;
+    }
+    return (uint16_t)scaled;
+}
+/**
+ * Packs buttons and the 10-bit accel axes into the 5-byte report style the Wiimote
+ * uses (BB1, BB2, X-MSB, Y-MSB, and Z-MSB), and then sends it.
+ * This is the only instance which a report gets constructed so gamepad_task and
+ * send_gamepad_last_report can't disagree about the layout.
+ *
+ * Byte 0 (BB1): bits 0-4 = buttons 0-4, bits 5-6 = X-accel LSBs, bit 7 unused.
+ * Byte 1 (BB2): bits 0-4 = buttons 5-9, bit 5 = Y accel LSB, bit 6 = Z-accel LSB
+ *               bit 7 = button 10
+ * Byte 2-4: X, Y, Z accel MSBs (8 bits each)
+ *
+ * The msb and lsb lines mirrors the real Wiimote's precision loss rather than introducing
+ * our own: we take bit 1 of the 2-bit remainder and drop bit 0, since the 10th bit for Y
+ * and Z don't exist.
+ * @param buttons
+ * @param x10
+ * @param y10
+ * @param z10
+ */
+static void send_gamepad_report(uint16_t buttons, uint16_t x10, uint16_t y10, uint16_t z10)
 {
     if (!mutex) return;
     xSemaphoreTake(mutex, portMAX_DELAY);
-    buffer[0] = buttons & 0xFF; //buttons 1-8
-    buffer[1] = (buttons >> 8) & 0xFF; //buttons 9-11
+
+    uint8_t x_msb = (uint8_t)(x10 >> 2);
+    uint8_t y_msb = (uint8_t)(y10 >> 2);
+    uint8_t z_msb = (uint8_t)(z10 >> 2);
+    uint8_t x_lsb = (uint8_t)(x10 & 0x03); //BB1 bits 5-6
+    uint8_t y_lsb = (uint8_t)((y10 >> 1) & 0x01); //BB2 bit 5
+    uint8_t z_lsb = (uint8_t)((z10 >> 1) & 0x01); //BB2 bit 6
+
+    uint8_t bb1 = (uint8_t)(buttons & 0x1F); //buttons 0-4, bits 0-4
+    bb1 |= (uint8_t)(x_lsb << 5);
+
+    uint8_t bb2 = (uint8_t)((buttons >> 5) & 0x1F); //buttons 5-9, bits 0-4
+    bb2 |= (uint8_t)(y_lsb << 5);
+    bb2 |= (uint8_t)(z_lsb << 6);
+    if (buttons & (1 << 10)) {
+        bb2 |= 0x80; //button 10 = bit 7
+    }
+
+    buffer[0] = bb1;
+    buffer[1] = bb2;
+    buffer[2] = x_msb;
+    buffer[3] = y_msb;
+    buffer[4] = z_msb;
+
     esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, GAMEPAD_REPORT_ID,
                                   GAMEPAD_REPORT_SIZE, buffer);
     xSemaphoreGive(mutex);
 }
 
-// ---------- Tasks ---------- //
+/**
+ * Resends whatever report was last built by send_gamepad_report. Used for
+ * ESP_HIDD_GET_REPORT_EVT so that it recives a stale value rather than a hardcoded
+ * fake one.
+ */
+ void send_gamepad_last_report() {
+     if (!mutex) return;
+     xSemaphoreTake(mutex, portMAX_DELAY);
+     esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, GAMEPAD_REPORT_ID,
+                                  GAMEPAD_REPORT_SIZE, buffer);
+     xSemaphoreGive(mutex);
+ }
 
+// ---------- Tasks ---------- //
+/**
+ * Determines the state of the connection LED, meant to mimic that of a wiimote's LEDs.
+ * if the ESP is connected to a host, the LED will be solid. Otherwise, it blinks on
+ * and off.
+ * @param pvParameters
+ */
 static void led_task(void *pvParameters)
 {
     while (true) {
@@ -46,6 +146,19 @@ static void led_task(void *pvParameters)
     }
 }
 
+/**
+ * Main polling loop: reads 11 button GPIOs, the accelerometer, converts accel
+ * to 10-bit range (by calling to_10bit), and sends a report every 20ms (by calling
+ * send_gamepad_report).
+ * Runs from gamepad_task_start until the task is deleted by gamepad_task_stop.
+ *
+ * A failed accel read falls back to a neutral (512,512,512) reading for that cycle
+ * so that button input is not affected.
+ *
+ * The 20ms send interval matches Window's Bluetooth sniff-mode interval (~11.25ms
+ * QoS access_latency set in main.c)
+ * @param pvParameters
+ */
 static void gamepad_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "gamepad task started");
@@ -53,7 +166,7 @@ static void gamepad_task(void *pvParameters)
     int tick = 0;
 
     while (true) {
-        // --- Buttons ---
+        // Buttons
         uint8_t button_up    = !gpio_get_level(BUTTON_UP);
         uint8_t button_down  = !gpio_get_level(BUTTON_DOWN);
         uint8_t button_left  = !gpio_get_level(BUTTON_LEFT);
@@ -94,43 +207,40 @@ static void gamepad_task(void *pvParameters)
                      buttons, (uint8_t)(buttons & 0xFF), (uint8_t)((buttons >> 8) & 0xFF));
             last_buttons = buttons;
         }
-// ----------- Acceleration ---------- //
+        // Acceleration
         accel_g_t accel = {0};
         esp_err_t accel_err = read_g_values(&accel_device, &accel);
 
+        //read neutral on failure
+        uint16_t accel_x = 512;
+        uint16_t accel_y = 512;
+        uint16_t accel_z = 512;
         // converts the read g values to wiimote 10-bit range
-        uint16_t accel_x, accel_y, accel_z;
         if (accel_err == ESP_OK) {
-            accel_x = (uint16_t)((accel.x * 170.0f) + 512);
-            accel_y = (uint16_t)((accel.y * 170.0f) + 512);
-            accel_z = (uint16_t)((accel.z * 170.0f) + 512);
-            accel_x = accel_x > 1023 ? 1023 : accel_x;
-            accel_y = accel_y > 1023 ? 1023 : accel_y;
-            accel_z = accel_z > 1023 ? 1023 : accel_z;
-        } else {
-            accel_x = accel_y = accel_z = 0; // neutral on failure
+            accel_x = to_10bit(accel.x);
+            accel_y = to_10bit(accel.y);
+            accel_z = to_10bit(accel.z);
+
         }
 
-// ---------- Testing from monitor end ---------- //
+        // ---------- Testing from monitor end ---------- //
         if (ACCEL_DEBUG_LOG) {
             if (++tick % 20 == 0) {
-                ESP_LOGI(TAG, "ACCEL X:%4u Y:%4u Z:%4u",
-                         accel_x, accel_y, accel_z);
+                ESP_LOGI(TAG, "g:[%+.3f %+.3f %+.3f]  hid10:[%4u %4u %4u]",
+                          accel.x, accel.y, accel.z, accel_x, accel_y, accel_z);
             }
         }
 
-        if (xSemaphoreTake(mutex, portMAX_DELAY)) {
-            buffer[0] = buttons & 0xFF;
-            buffer[1] = (buttons >> 8) & 0xFF;
-            esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, GAMEPAD_REPORT_ID,
-                                          GAMEPAD_REPORT_SIZE, buffer);
-            xSemaphoreGive(mutex);
-        }
+        send_gamepad_report(buttons, accel_x, accel_y, accel_z);
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
 /**
- * bus_config
+ * Initializes I2c that the MPU6050 needs to function. Internal pull-ups are enabled
+ * rather than relying on external ones on the breakout board.
+ * ESP_ERROR_CHECK is used because a failure here means that the accelerometer wont
+ * work for the rest of the program's lifetime.
+ * @return bus_handle
  */
 static i2c_master_bus_handle_t i2c_init() {
     i2c_master_bus_config_t bus_config = {
@@ -148,23 +258,33 @@ static i2c_master_bus_handle_t i2c_init() {
     return bus_handle;
 }
 
+/**
+ * A one-time setup, called from main.c before Bluetooth comes up.
+ * initializes i2c, the MPU6050, confiures all 11 buttons to pull-up
+ * inputs, sets up the connection-status LED, and starts led_task.
+ *
+ * Does NOT call gamepad_task so that reports aren't sent until after
+ * a host is connected, so that there is a place for reports to get
+ * sent to.
+ */
 void gamepad_init()
 {
     // Acceleration
     i2c_master_bus_handle_t bus = i2c_init();
     ESP_ERROR_CHECK(accel_init(&accel_device, bus, ACCEL_RANGE_2G));
 
-    const int btn_pins[] = {
+    // Buttons
+    const int button_pins[] = {
             BUTTON_UP, BUTTON_DOWN, BUTTON_LEFT, BUTTON_RIGHT,
             BUTTON_A, BUTTON_B,
             BUTTON_MINUS, BUTTON_HOME, BUTTON_PLUS,
             BUTTON_1, BUTTON_2
     };
-    int button_size = sizeof(btn_pins) / sizeof(btn_pins[0]);
+    int button_size = sizeof(button_pins) / sizeof(button_pins[0]);
 
     for (int i = 0; i < button_size; i++) {
-        gpio_set_direction(btn_pins[i], GPIO_MODE_INPUT);
-        gpio_set_pull_mode(btn_pins[i], GPIO_PULLUP_ONLY);
+        gpio_set_direction(button_pins[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(button_pins[i], GPIO_PULLUP_ONLY);
     }
 
     // LED
@@ -174,6 +294,11 @@ void gamepad_init()
     ESP_LOGI(TAG, "gamepad initialized");
 }
 
+/**
+ * Starts polling/sending reports. Called from ESP_HIDD_OPEN_EVT once a host acttually connects.
+ * The mutex is created here so that there's no window where any mutex from a previous connection could
+ * be reused.
+ */
 void gamepad_task_start()
 {
     mutex = xSemaphoreCreateMutex();
@@ -181,6 +306,14 @@ void gamepad_task_start()
                 configMAX_PRIORITIES - 3, &handle_task);
 }
 
+/**
+ * Stops polling/sending reports on disconnect (called from ESP_HIDD_CLOSE_EVT or ESP_HIDD_VC_UNPLUG_EVT
+ * in main.c). Deletes the task by vTaskDelete, unlike the Rust version's gamepad_task, which polls an
+ * atomic flag each loop iteration.
+ *
+ * Guards both handle_task and mutex against being NULL so even that if the task was never started it doesn't
+ * break if called. Nulls both out after so a repeat call does not result in a double-free.
+ */
 void gamepad_task_stop()
 {
     if (handle_task) {

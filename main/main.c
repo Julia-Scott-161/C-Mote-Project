@@ -28,21 +28,50 @@ static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
 
 // ---------- HID Descriptor ---------- //
 static uint8_t HIDD[] = {
-        0x05, 0x01,
-        0x09, 0x05,
-        0xa1, 0x01,
-        0x05, 0x09,
-        0x19, 0x01,
-        0x29, 0x0B,
-        0x15, 0x00,
-        0x25, 0x01,
-        0x95, 0x0B,
-        0x75, 0x01,
-        0x81, 0x02,
-        0x95, 0x01,
-        0x75, 0x05,
-        0x81, 0x03,
-        0xc0
+        0x05, 0x01, //Usage Page (Generic Desktop)
+        0x09, 0x05, //Usage Page (Gamepad)
+        0xa1, 0x01, //Collection (Application)
+
+        //Byte 0: buttons 1-5, X-accel LSBs + pad
+        0x05, 0x09, //Usage Page (Button)
+        0x19, 0x01, //Usage Minimum (Button 1)
+        0x29, 0x05, //Usage Maximum (Button 5)
+        0x15, 0x00, //Logical Minimum (0)
+        0x25, 0x01, //Logical Maximum (1)
+        0x95, 0x05, //Report Count (5)
+        0x75, 0x01, //Report Size (1 bit)
+        0x81, 0x02, //Input (Data, Variable, Absolute)  <- buttons 1-5
+        0x95, 0x03, //Report Count (3)
+        0x75, 0x01, //Report Size (1)
+        0x81, 0x03, //Input (Constant)
+
+        //Byte 1: buttons 6-10, Y/Z LSBs, button 11 (Home)
+        0x19, 0x06, //Usage Minimum (Button 6)
+        0x29, 0x0A, //Usage Maximum (Button 10)
+        0x95, 0x05, //Report Count (5)
+        0x75, 0x01, //Report Size (1)
+        0x81, 0x02, //Input (Data, Variable, Absolute)  <- buttons 1-5
+        0x95, 0x02, //Report Count (2)
+        0x75, 0x01, //Report Size (1)
+        0x81, 0x03, //Input (Constant) <- Y-Accel LSB, Z-Accel LSB
+        0x19, 0x0B, //Usage Minimum (Button 11)
+        0x29, 0x0B, //Usage Maximum (Button 11)
+        0x95, 0x01, //Report Count (1)
+        0x75, 0x01, //Report Size (1)
+        0x81, 0x02, //Input (Data, Variable, Absolute)  <- buttons 1-5
+
+        //Bytes 2-4: Accel MSBs
+        0x05, 0x01, //Usage Page (Generic Desktop)
+        0x09, 0x30, //Usage (X)
+        0x09, 0x31, //Usage (Y)
+        0x09, 0x32, //Usage (Z)
+        0x15, 0x00, //Logical Minimum (0)
+        0x26, 0xFF, 0x00, //Logical Maximum (255)
+        0x75, 0x08, //Report Size (8)
+        0x95, 0x03, //Report Count (3)
+        0x81, 0x02, //Input (Data, Variable, Absolute) <- X, Y, Z accel bytes
+
+        0xc0 //End Collection
 };
 
 // ---------- HID App Parameters ---------- //
@@ -171,7 +200,7 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
             }
             break;
         case ESP_HIDD_GET_REPORT_EVT:
-            send_gamepad_report(0x0000);
+            send_gamepad_last_report();
             break;
         case ESP_HIDD_SEND_REPORT_EVT:
             if (param->send_report.status != ESP_HIDD_SUCCESS) {
