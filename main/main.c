@@ -2,8 +2,8 @@
   * classic. Like the Wii remote, this program is meant to support 11 buttons, and
   * an MPU6050 for acceleration.
   *
-  * At the time of this commit, the ESP32 connects to a PC, and buttons are working
-  * as intended.
+  * At the time of this commit, the ESP32 connects to a PC, buttons are working
+  * as intended, and acceleration returns values
 
   * Meant to emulate an original Wii remote, the Wii Motion Control Plus (gyroscope
   * values) are not currently supported.
