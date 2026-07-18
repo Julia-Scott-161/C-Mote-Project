@@ -10,19 +10,23 @@
 #include "freertos/semphr.h"
 
 //------------------- Definitions: Buttons -------------------//
-#define BUTTON_A                21
-#define BUTTON_B                19
-#define BUTTON_MINUS            14
-#define BUTTON_HOME             23
-#define BUTTON_PLUS             13
-#define BUTTON_1                18
-#define BUTTON_2                25
-#define BUTTON_UP               22
-#define BUTTON_DOWN             26
-#define BUTTON_LEFT             27
-#define BUTTON_RIGHT            5
+// Following typical Wiimote protocol bit layout
+// Byte 1: (bits 0-4)
+#define BUTTON_LEFT             25 //currently not working
+#define BUTTON_RIGHT            33 //currently not working
+#define BUTTON_DOWN             26 //currently not working
+#define BUTTON_UP               27 //currently not working
+#define BUTTON_PLUS             21
+//Byte 2: (bits 0-4 and 7)
+#define BUTTON_2                15
+#define BUTTON_1                5
+#define BUTTON_B                14
+#define BUTTON_A                32 //Currently causing a power_on reset once pressed.
+#define BUTTON_MINUS            18
+#define BUTTON_HOME             19
+
 //LED pin for identifying connection status
-#define LED_PIN                 20
+#define LED_PIN                 23
 
 //------------------- Definitions: Acceleration -------------------//
 #define I2C_SDA     4
