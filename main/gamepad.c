@@ -42,6 +42,22 @@ void gamepad_set_connected(bool status)
 }
 
 /**
+ * Called from main.c when output report 0x12 (DRM select) arrives.
+ * Currently, as only 0x31 is built/sent, this just serves as a log for what the
+ * host actually requested, good for checking which reports need to be implemented.
+ * @param mode the byte requested by the host.
+ */
+void gamepad_set_drm_mode(uint8_t mode) {
+    if (mode != GAMEPAD_REPORT_ID) {
+        ESP_LOGW(TAG, "Only 0x31 is implemented, Host requested DRM mode 0x%02x",
+                 mode);
+    }
+    else {
+        ESP_LOGI(TAG, "Host requested 0x%02x DRM mode (currently implemented)", mode);
+    }
+}
+
+/**
  * Converts a g-value into the Wiimote-style 10-bit unsigned range.
  * Clamped on both end so that a large negative float wraps to 0
  * instead of to large number.
@@ -64,20 +80,19 @@ static inline uint16_t to_10bit(float value) {
  * This is the only instance which a report gets constructed so gamepad_task and
  * send_gamepad_last_report can't disagree about the layout.
  *
- * Byte 0 (BB1): bits 0-4 = buttons 0-4, bits 5-6 = X-accel LSBs, bit 7 unused.
- * Byte 1 (BB2): bits 0-4 = buttons 5-9, bit 5 = Y accel LSB, bit 6 = Z-accel LSB
- *               bit 7 = button 10
- * Byte 2-4: X, Y, Z accel MSBs (8 bits each)
+ * bb1 and bb2 are already built with the correct button bit positions in gamepad.h
  *
- * The msb and lsb lines mirrors the real Wiimote's precision loss rather than introducing
+ * The msb and lsb lines mirror the real Wiimote's precision loss rather than introducing
  * our own: we take bit 1 of the 2-bit remainder and drop bit 0, since the 10th bit for Y
  * and Z don't exist.
- * @param buttons
+ *
+ * @param bb1 byte 1 (buttons + X-accel LSB)
+ * @param bb2 byte 2 (buttons + Y-accel + Z-accel LSB)
  * @param x10
  * @param y10
  * @param z10
  */
-static void send_gamepad_report(uint16_t buttons, uint16_t x10, uint16_t y10, uint16_t z10)
+static void send_gamepad_report(uint8_t bb1, uint8_t bb2, uint16_t x10, uint16_t y10, uint16_t z10)
 {
     if (!mutex) return;
     xSemaphoreTake(mutex, portMAX_DELAY);
@@ -89,15 +104,9 @@ static void send_gamepad_report(uint16_t buttons, uint16_t x10, uint16_t y10, ui
     uint8_t y_lsb = (uint8_t)((y10 >> 1) & 0x01); //BB2 bit 5
     uint8_t z_lsb = (uint8_t)((z10 >> 1) & 0x01); //BB2 bit 6
 
-    uint8_t bb1 = (uint8_t)(buttons & 0x1F); //buttons 0-4, bits 0-4
     bb1 |= (uint8_t)(x_lsb << 5);
-
-    uint8_t bb2 = (uint8_t)((buttons >> 5) & 0x1F); //buttons 5-9, bits 0-4
     bb2 |= (uint8_t)(y_lsb << 5);
     bb2 |= (uint8_t)(z_lsb << 6);
-    if (buttons & (1 << 10)) {
-        bb2 |= 0x80; //button 10 = bit 7
-    }
 
     buffer[0] = bb1;
     buffer[1] = bb2;
@@ -134,7 +143,7 @@ static void led_task(void *pvParameters)
 {
     while (true) {
         if (connection) {
-            gpio_set_level(LED_PIN, 1);
+            gpio_set_level(LED_PIN, 0);
             vTaskDelay(20 / portTICK_PERIOD_MS);
         }
         else {
@@ -183,29 +192,30 @@ static void gamepad_task(void *pvParameters)
         uint8_t button_2     = !gpio_get_level(BUTTON_2);
 
 
-        uint16_t buttons =
-                //((uint16_t)button_up << 0)
-                (button_up    << 0)  |
-                (button_down  << 1)  |
-                (button_left  << 2)  |
-                (button_right << 3)  |
-                (button_a     << 4)  |
-                (button_b     << 5)  |
-                (button_minus << 6)  |
-                (button_home  << 7)  |
-                (button_plus  << 8)  |
-                (button_1     << 9)  |
-                (button_2     << 10);
+        uint8_t bb1 =
+                (button_left  ? BB1_LEFT  : 0) |
+                (button_right ? BB1_RIGHT : 0) |
+                (button_down  ? BB1_DOWN  : 0) |
+                (button_up    ? BB1_UP    : 0) |
+                (button_plus  ? BB1_PLUS  : 0);
+
+        uint8_t bb2 =
+                (button_2     ? BB2_TWO   : 0) |
+                (button_1     ? BB2_ONE   : 0) |
+                (button_b     ? BB2_B     : 0) |
+                (button_a     ? BB2_A     : 0) |
+                (button_minus ? BB2_MINUS : 0) |
+                (button_home  ? BB2_HOME  : 0);
 
         //For testing button outputs from monitor's end
-        if (buttons != last_buttons) {
+        uint16_t buttons_debug = ((uint16_t)bb2 << 8) | bb1;
+        if (buttons_debug != last_buttons) {
             ESP_LOGI(TAG, "GPIO raw: UP=%d DN=%d LT=%d RT=%d A=%d B=%d -=%d HOME=%d +=%d 1=%d 2=%d",
                      button_up, button_down, button_left, button_right,
                      button_a, button_b, button_minus, button_home,
                      button_plus, button_1, button_2);
-            ESP_LOGI(TAG, "Button mask: 0x%04X  buf[0]=0x%02X buf[1]=0x%02X",
-                     buttons, (uint8_t)(buttons & 0xFF), (uint8_t)((buttons >> 8) & 0xFF));
-            last_buttons = buttons;
+            ESP_LOGI(TAG, "BB1=0x%02X BB2=0x%02X", bb1, bb2);
+            last_buttons = buttons_debug;
         }
         // Acceleration
         accel_g_t accel = {0};
@@ -215,6 +225,7 @@ static void gamepad_task(void *pvParameters)
         uint16_t accel_x = 512;
         uint16_t accel_y = 512;
         uint16_t accel_z = 512;
+
         // converts the read g values to wiimote 10-bit range
         if (accel_err == ESP_OK) {
             accel_x = to_10bit(accel.x);
@@ -231,7 +242,7 @@ static void gamepad_task(void *pvParameters)
             }
         }
 
-        send_gamepad_report(buttons, accel_x, accel_y, accel_z);
+        send_gamepad_report(bb1, bb2, accel_x, accel_y, accel_z);
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }

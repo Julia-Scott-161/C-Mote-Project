@@ -19,9 +19,9 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_gap_bt_api.h"
+#include "esp_sdp_api.h"
 #include <string.h>
 #include <inttypes.h>
-#include "esp_sdp_api.h"
 
 #include "gamepad.h"
 
@@ -30,9 +30,10 @@ static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
 
 // ---------- Device Identification (SDP DIP record) ---------- //
 //Real Wii remotes report these over the Device ID profile SDP record.
-//TODO: currently just a placeholder
+
 #define WIIMOTE_VENDOR_ID 0x057e //Nintendo Co. Ltd.
 #define WIIMOTE_PRODUCT_ID 0x0306 //RVL-CNT-01
+//schrodinger's code: works until otherwise disproved
 #define WIIMOTE_VERSION 0x0100 //PLACEHOLDER
 
 // ---------- HID Descriptor ---------- //
@@ -125,6 +126,7 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
             // For the sync button, it is the bluetooth address of your PC
             // written backwards.
             // This code does not currently require either, it uses 1234.
+            // note here - currently not correct, but also not causing problems.
         case ESP_BT_GAP_PIN_REQ_EVT:
             if (param->pin_req.min_16_digit) {
                 esp_bt_pin_code_t pin_code = {0};
@@ -141,6 +143,7 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
             break;
     }
 }
+
 // ---------- HID Callback ---------- //
 void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
 
@@ -157,7 +160,7 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
             if (param->register_app.status == ESP_HIDD_SUCCESS) {
                 ESP_LOGI(TAG, "Now discoverable");
                 esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-                //TODO: TEST and FIX -> doesn't seem to be reconnecting, despite being in my saved devices
+                // Same as previous note. Not correct, but not causing issues
                 if (param->register_app.in_use) {
                     ESP_LOGI(TAG, "reconnecting to known host");
                     esp_bt_hid_device_connect(param->register_app.bd_addr);
@@ -211,6 +214,43 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
         case ESP_HIDD_GET_REPORT_EVT:
             send_gamepad_last_report();
             break;
+        case ESP_HIDD_SET_REPORT_EVT: {
+            // Logs each output report from the host so the wiimote protocol
+            // is exposed and can be implemented easier, instead of just guessing
+            // where it fails or what the bytes mean.
+            const uint8_t *desc = param -> set_report.data;
+            uint16_t len = param -> set_report.len;
+            char hex[64] = {0};
+            int position = 0;
+            for (int i = 0; i < len && position < (int) sizeof(hex) - 3; i++) {
+                position += snprintf(hex + position, sizeof(hex) - position, "%02x ", desc[i]);
+            }
+            ESP_LOGW(TAG, "SET_REPORT: type=%d id=0x%02x len=%d data=[ %s]",
+                     param->set_report.report_type, param->set_report.report_id, len, hex);
+
+            if (param->set_report.report_id == 0x12 && len >= 2) {
+                gamepad_set_drm_mode(desc[1]);
+            }
+            break;
+        }
+        case ESP_HIDD_INTR_DATA_EVT: {
+            // Wiimotes send output reports over the INTERRUPT channel, rather than
+            // the typical SET_REPORT on the control channel.
+            const uint8_t *desc = param -> intr_data.data;
+            uint16_t len = param -> intr_data.len;
+            char hex[64] = {0};
+            int position = 0;
+            for (int i = 0; i < len && position < (int)sizeof(hex) - 3; i++) {
+                position += snprintf(hex + position, sizeof(hex) - position, "%02x ", desc[i]);
+            }
+            ESP_LOGW(TAG, "INTR_DATA: id=0x%02x len=%d data=[ %s]",
+                     param->intr_data.report_id, len, hex);
+
+            if (param->intr_data.report_id == 0x12 && len >= 2) {
+                gamepad_set_drm_mode(desc[1]);
+            }
+            break;
+        }
         case ESP_HIDD_SEND_REPORT_EVT:
             if (param->send_report.status != ESP_HIDD_SUCCESS) {
                 ESP_LOGE(TAG, "send report failed: id:0x%02x status:%d reason:%d",
