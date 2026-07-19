@@ -1,2 +1,2 @@
-source C:/Users/jmari/CLionProjects/emulated_wiimote/build/bootloader/gdbinit/symbols
-source C:/Users/jmari/CLionProjects/emulated_wiimote/build/bootloader/gdbinit/connect
+source C:/Users/jmari/Wiimote/emulated_wiimote/build/bootloader/gdbinit/symbols
+source C:/Users/jmari/Wiimote/emulated_wiimote/build/bootloader/gdbinit/connect

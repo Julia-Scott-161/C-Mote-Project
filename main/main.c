@@ -1,12 +1,13 @@
-/** This project uses ESP-IDF and an ESP32 to emulate a Wii remote using bluetooth
+/** This project uses ESP-IDF and an ESP32 to recreate a Wii remote using bluetooth
   * classic. Like the Wii remote, this program is meant to support 11 buttons, and
-  * an MPU6050 for acceleration.
+  * uses a MPU6050 for acceleration values.
   *
-  * At the time of this commit, the ESP32 connects to a PC, buttons are working
-  * as intended, and acceleration returns values
+  * This begins to branch away from a typical bluetooth HID controller to a more
+  * faithful implementation of the Wiimote protocol.
 
-  * Meant to emulate an original Wii remote, the Wii Motion Control Plus (gyroscope
-  * values) are not currently supported.
+  * As it's meant to recreate the original Wii remote, the Wii Motion Control Plus
+  * (gyroscope values) will not be supported, despite the MPU6050 having the ability
+  * to measure them.
   *
   * Author: Julia Scott (Julia-Scott-161)
   **/
@@ -20,12 +21,19 @@
 #include "esp_gap_bt_api.h"
 #include <string.h>
 #include <inttypes.h>
+#include "esp_sdp_api.h"
 
 #include "gamepad.h"
 
-static const char *TAG = "main";
-//static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
-static const char device_name[] = "Cmote"; //unoffical name
+static const char *TAG = "Main/Bluetooth";
+static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
+
+// ---------- Device Identification (SDP DIP record) ---------- //
+//Real Wii remotes report these over the Device ID profile SDP record.
+//TODO: currently just a placeholder
+#define WIIMOTE_VENDOR_ID 0x057e //Nintendo Co. Ltd.
+#define WIIMOTE_PRODUCT_ID 0x0306 //RVL-CNT-01
+#define WIIMOTE_VERSION 0x0100 //PLACEHOLDER
 
 // ---------- HID Descriptor ---------- //
 static uint8_t HIDD[] = {
@@ -220,6 +228,52 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
             break;
     }
 }
+
+// ---------- SDP DIP Callback (Vendor/Product ID) ---------- //
+/**
+ * Handles the SDP events. ESP_SDP_INIT_EVT builds and registers a Device ID Profile (DIP)
+ * record that advertises the Wiimotes's VendorID/ProductID.
+ *
+ * ESP-IDF has a known issue where the VID/PID can show as 0xFFFF/0x0000 on the host side in
+ * Classic BT mode with a different HIDD API. It is unclear whether the SDP-record approach
+ * is affected the same way, so ESP_LOGW confirms what the stack was asked to advertise, so
+ * that for any issues on the host side, it can be ruled out that it's an issue with what was
+ * asked
+ */
+ static void esp_sdp_cb(esp_sdp_cb_event_t event, esp_sdp_cb_param_t *param) {
+     switch (event) {
+         case ESP_SDP_INIT_EVT:
+             if (param->init.status == ESP_SDP_SUCCESS) {
+                 esp_bluetooth_sdp_dip_record_t dip_record = {
+                         .hdr = {
+                                 .type = ESP_SDP_TYPE_DIP_SERVER,
+                         },
+                         .vendor           = WIIMOTE_VENDOR_ID,
+                         .vendor_id_source = ESP_SDP_VENDOR_ID_SRC_BT,
+                         .product          = WIIMOTE_PRODUCT_ID,
+                         .version          = WIIMOTE_VERSION,
+                         .primary_record   = true,
+                 };
+                 ESP_LOGW(TAG, "Requesting DIP record: VID=0x%04x PID=0x%04x version=0x%04x ",
+                          dip_record.vendor, dip_record.product, dip_record.version);
+                          esp_sdp_create_record((esp_bluetooth_sdp_record_t *)&dip_record);
+             }
+             else {
+                 ESP_LOGE(TAG, "SDP init failed: status=%d", param -> init.status);
+             }
+             break;
+         case ESP_SDP_CREATE_RECORD_COMP_EVT:
+             ESP_LOGI(TAG, "DIP record created: status=%d handle=0x%x",
+                      param->create_record.status, param -> create_record.record_handle);
+             break;
+         case ESP_SDP_DEINIT_EVT:
+             ESP_LOGI(TAG, "SDP deinitialized: status=%d", param -> deinit.status);
+             break;
+         default:
+             break;
+     }
+}
+
 // ---------- Main ---------- //
 
 void app_main(void) {
@@ -252,9 +306,13 @@ void app_main(void) {
 
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    controller_hid.app_param.name           = "CMote";
-    controller_hid.app_param.description    = "Button Input";
+    //populates the SDP HID service record's attributes, separate from the GAP device name
+    //TODO: no confirmed evidence that the wii protocol checks this.
+    controller_hid.app_param.name           = "Nintendo RVL-CNT-01";
+    controller_hid.app_param.description    = "Button + Accel Input";
     controller_hid.app_param.provider       = "ESP32";
+    //TODO: may map to a CoD-adjacent value used within the SDP HID descriptor, separate
+    // from the cod.minor set manually via esp_bt_gap_set_cod()
     controller_hid.app_param.subclass       = ESP_HID_CLASS_GPD;
     controller_hid.app_param.desc_list      = HIDD;
     controller_hid.app_param.desc_list_len  = sizeof(HIDD);
@@ -274,6 +332,9 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "own address: %s",
              bluetooth_address_to_string((uint8_t *)esp_bt_dev_get_address(), bluetooth_address_string));
+
+    ESP_ERROR_CHECK(esp_sdp_register_callback(esp_sdp_cb));
+    ESP_ERROR_CHECK(esp_sdp_init());
 
     gamepad_init();
 }

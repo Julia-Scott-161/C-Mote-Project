@@ -22,4 +22,4 @@ set confirm off
 set confirm on
 
 # Load application symbols
-file C:/Users/jmari/CLionProjects/emulated_wiimote/build/bootloader/bootloader.elf
+file C:/Users/jmari/Wiimote/emulated_wiimote/build/bootloader/bootloader.elf

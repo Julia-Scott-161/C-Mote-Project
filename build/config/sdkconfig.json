@@ -350,7 +350,7 @@
     "BT_NIMBLE_ENABLED": false,
     "BT_PBAC_ENABLED": false,
     "BT_SDP_ATTR_LEN": 300,
-    "BT_SDP_COMMON_ENABLED": false,
+    "BT_SDP_COMMON_ENABLED": true,
     "BT_SDP_PAD_LEN": 300,
     "BT_SMP_CRYPTO_STACK_MBEDTLS": false,
     "BT_SMP_CRYPTO_STACK_NATIVE": false,
