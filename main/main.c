@@ -20,13 +20,14 @@
 #include "nvs_flash.h"
 #include "esp_gap_bt_api.h"
 #include "esp_sdp_api.h"
+#include "esp_mac.h" //isolates mac value for testing
 #include <string.h>
 #include <inttypes.h>
 
 #include "gamepad.h"
 
 static const char *TAG = "Main/Bluetooth";
-static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
+static const char device_name[] = "Nintendo RVL-CNT-03"; //official name
 
 // ---------- Device Identification (SDP DIP record) ---------- //
 //Real Wii remotes report these over the Device ID profile SDP record.
@@ -59,9 +60,6 @@ static const char device_name[] = "Nintendo RVL-CNT-01"; //official name
 #define WIIMOTE_REPORT(id, count, io) \
         0x85, (id),             /* Report ID */ \
         0x09, 0x01,             /* Usage (Vendor Usage 1) */ \
-        0x15, 0x00,             /* Logical Minimum (0) */ \
-        0x26, 0xFF, 0x00,       /* Logical Maximum (255) */ \
-        0x75, 0x08,             /* Report size (8) */ \
         0x95, (count),          /* Report count */ \
         (io), 0x02              /* Data, Variable, Absolute */
 
@@ -69,6 +67,9 @@ static uint8_t HIDD[] = {
         0x06, 0x00, 0xFF, //Usage Page (Vendor Defined 0xFF00)
         0x09, 0x01, //Usage Page (Vendor Usage 1)
         0xa1, 0x01, //Collection (Application)
+        0x15, 0x00, //Logical Minimum (0)
+        0x26, 0xFF, 0x00, // Logical Maximum (255)
+        0x75, 0x08, //Report Size (8)
 
         // ---------- Output reports: Host -> Wiimote ---------- //
         WIIMOTE_REPORT(0x10, 1,  0x91), //Rumble
@@ -339,6 +340,8 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
 
 void app_main(void) {
     char bluetooth_address_string[18] = {0};
+    uint8_t new_mac[6] = {0x30, 0x76, 0xf5, 0xb9, 0x69, 0x99}; // any value different from your real one
+    esp_base_mac_addr_set(new_mac);
 
     esp_err_t return_code = nvs_flash_init();
     if (return_code == ESP_ERR_NVS_NO_FREE_PAGES || return_code == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -391,11 +394,11 @@ void app_main(void) {
 
     // Forces legacy (PIN-based) pairing instead of Secure Simple Pairing, since
     // real Wiimotes only support legacy pairing
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
-    esp_err_t result = esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to force legacy pairing (IO cap NONE): %s", esp_err_to_name(result));
-    }
+//    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
+//    esp_err_t result = esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(iocap));
+//    if (result != ESP_OK) {
+//        ESP_LOGE(TAG, "Failed to force legacy pairing (IO cap NONE): %s", esp_err_to_name(result));
+//    }
 
     esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
     esp_bt_pin_code_t pin_code;
