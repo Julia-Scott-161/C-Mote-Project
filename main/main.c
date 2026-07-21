@@ -4,6 +4,12 @@
   *
   * This begins to branch away from a typical bluetooth HID controller to a more
   * faithful implementation of the Wiimote protocol.
+  *
+  * Current progress: Dolphin (Wii emulation software) recognizes it as a real wiimote,
+  * and sends reports. Only 0x31 is implemented, and has not been tested.
+  * Future goals:
+        * Implement 0x30 (core buttons)
+        * Test 0x31 (Core buttons + Accel)
 
   * As it's meant to recreate the original Wii remote, the Wii Motion Control Plus
   * (gyroscope values) will not be supported, despite the MPU6050 having the ability
