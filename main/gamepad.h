@@ -19,9 +19,9 @@
 #define BUTTON_PLUS             21
 //Byte 2: (bits 0-4 and 7)
 #define BUTTON_2                15
-#define BUTTON_1                5
+#define BUTTON_1                12
 #define BUTTON_B                14
-#define BUTTON_A                32 //Currently causing a power_on reset once pressed.
+#define BUTTON_A                5 //Button A is currently causing a power_on reset once pressed, regardless if its on GPIO 12 or 32.
 #define BUTTON_MINUS            18
 #define BUTTON_HOME             19
 
