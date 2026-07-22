@@ -19,9 +19,9 @@
 #define BUTTON_PLUS             21
 //Byte 2: (bits 0-4 and 7)
 #define BUTTON_2                15
-#define BUTTON_1                12
+#define BUTTON_1                5
 #define BUTTON_B                14
-#define BUTTON_A                5 //Button A is currently causing a power_on reset once pressed, regardless if its on GPIO 12 or 32.
+#define BUTTON_A                13
 #define BUTTON_MINUS            18
 #define BUTTON_HOME             19
 
@@ -36,8 +36,14 @@
 #define ACCEL_DEBUG_LOG 1
 
 //------------------- Definitions: Report -------------------//
-#define GAMEPAD_REPORT_ID       (0x31)
-#define GAMEPAD_REPORT_SIZE     (5)
+#define REPORT_ID_0x30       (0x30) //Core Buttons Only
+#define REPORT_SIZE_0x30     (2)
+#define REPORT_ID_0x31       (0x31) //Core Buttons + Accel
+#define REPORT_SIZE_0x31     (5)
+
+//sized to the largest report currently implemented
+#define GAMEPAD_REPORT_ID       REPORT_ID_0x31
+#define GAMEPAD_REPORT_SIZE     REPORT_SIZE_0x31
 
 //------------------- Definitions: Button Bit Positions -------------------//
 #define BB1_LEFT    0x01

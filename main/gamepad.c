@@ -29,6 +29,12 @@ static SemaphoreHandle_t mutex     = NULL;
 static TaskHandle_t      handle_task  = NULL;
 static uint8_t           buffer[GAMEPAD_REPORT_SIZE] = {0};
 
+// Real Wiimotes default to Core Buttons only (0x30) and switch to a
+// different mode when a game requests it through output mode 0x12.
+static volatile uint8_t drm_mode = REPORT_ID_0x30;
+static uint8_t           last_report_id  = REPORT_ID_0x30;
+static uint8_t           last_report_len = REPORT_ID_0x30;
+
 // ---------- Connection State ---------- //
 /**
  * flips the status of a "connection" boolean to true or false
@@ -43,17 +49,22 @@ void gamepad_set_connected(bool status)
 
 /**
  * Called from main.c when output report 0x12 (DRM select) arrives.
- * Currently, as only 0x31 is built/sent, this just serves as a log for what the
- * host actually requested, good for checking which reports need to be implemented.
+ * switches the active reporting mode for 0x30 (core buttons) and
+ * 0x31 (core buttons + accel) - which are the two modes gamepad_task
+ * and send_gamepad_report know how to build.
  * @param mode the byte requested by the host.
  */
 void gamepad_set_drm_mode(uint8_t mode) {
-    if (mode != GAMEPAD_REPORT_ID) {
-        ESP_LOGW(TAG, "Only 0x31 is implemented, Host requested DRM mode 0x%02x",
-                 mode);
-    }
-    else {
-        ESP_LOGI(TAG, "Host requested 0x%02x DRM mode (currently implemented)", mode);
+    switch (mode) {
+        case REPORT_ID_0x30:
+        case REPORT_ID_0x31:
+            drm_mode = mode;
+            ESP_LOGI(TAG, "Host requested 0x%02x DRM mode (implemented)", mode);
+            break;
+        default:
+            ESP_LOGW(TAG, "Host requested unimplemented DRM mode 0x%02x", mode);
+            drm_mode = REPORT_ID_0x31;
+            break;
     }
 }
 
@@ -64,7 +75,7 @@ void gamepad_set_drm_mode(uint8_t mode) {
  * @param value the number that is being converted.
  * @return the value converted to a 10-bit unsigned range.
  */
-static inline uint16_t to_10bit(float value) {
+static uint16_t to_10bit(float value) {
     int32_t scaled = (int32_t) (value * 170.0f + 512.0f);
     if (scaled < 0) {
         scaled = 0;
@@ -75,8 +86,8 @@ static inline uint16_t to_10bit(float value) {
     return (uint16_t)scaled;
 }
 /**
- * Packs buttons and the 10-bit accel axes into the 5-byte report style the Wiimote
- * uses (BB1, BB2, X-MSB, Y-MSB, and Z-MSB), and then sends it.
+ * Packs buttons (and, in 0x31 mode, the 10-bit accel axes) into the needed report style the Wiimote
+ * uses and then sends it.
  * This is the only instance which a report gets constructed so gamepad_task and
  * send_gamepad_last_report can't disagree about the layout.
  *
@@ -97,22 +108,38 @@ static void send_gamepad_report(uint8_t bb1, uint8_t bb2, uint16_t x10, uint16_t
     if (!mutex) return;
     xSemaphoreTake(mutex, portMAX_DELAY);
 
-    uint8_t x_msb = (uint8_t)(x10 >> 2);
-    uint8_t y_msb = (uint8_t)(y10 >> 2);
-    uint8_t z_msb = (uint8_t)(z10 >> 2);
-    uint8_t x_lsb = (uint8_t)(x10 & 0x03); //BB1 bits 5-6
-    uint8_t y_lsb = (uint8_t)((y10 >> 1) & 0x01); //BB2 bit 5
-    uint8_t z_lsb = (uint8_t)((z10 >> 1) & 0x01); //BB2 bit 6
+    uint8_t report_id;
+    uint8_t report_len;
 
-    bb1 |= (uint8_t)(x_lsb << 5);
-    bb2 |= (uint8_t)(y_lsb << 5);
-    bb2 |= (uint8_t)(z_lsb << 6);
+    if (drm_mode == REPORT_ID_0x30) {
+        buffer[0] = bb1;
+        buffer[1] = bb2;
+        report_id = REPORT_ID_0x30;
+        report_len = REPORT_SIZE_0x30;
+    }
+    else {
+        uint8_t x_msb = (uint8_t) (x10 >> 2);
+        uint8_t y_msb = (uint8_t) (y10 >> 2);
+        uint8_t z_msb = (uint8_t) (z10 >> 2);
+        uint8_t x_lsb = (uint8_t) (x10 & 0x03); //BB1 bits 5-6
+        uint8_t y_lsb = (uint8_t) ((y10 >> 1) & 0x01); //BB2 bit 5
+        uint8_t z_lsb = (uint8_t) ((z10 >> 1) & 0x01); //BB2 bit 6
 
-    buffer[0] = bb1;
-    buffer[1] = bb2;
-    buffer[2] = x_msb;
-    buffer[3] = y_msb;
-    buffer[4] = z_msb;
+        bb1 |= (uint8_t) (x_lsb << 5);
+        bb2 |= (uint8_t) (y_lsb << 5);
+        bb2 |= (uint8_t) (z_lsb << 6);
+
+        buffer[0] = bb1;
+        buffer[1] = bb2;
+        buffer[2] = x_msb;
+        buffer[3] = y_msb;
+        buffer[4] = z_msb;
+
+        report_id = REPORT_ID_0x31;
+        report_len = REPORT_SIZE_0x31;
+    }
+    last_report_id  = report_id;
+    last_report_len = report_len;
 
     esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, GAMEPAD_REPORT_ID,
                                   GAMEPAD_REPORT_SIZE, buffer);
