@@ -6,10 +6,10 @@
   * faithful implementation of the Wiimote protocol.
   *
   * Current progress: Dolphin (Wii emulation software) recognizes it as a real wiimote,
-  * and sends reports. Only 0x31 is implemented, and has not been tested.
+  * and sends reports.
   * Future goals:
-        * Implement 0x30 (core buttons)
-        * Test 0x31 (Core buttons + Accel)
+        * Test 0x30 (Core Buttons)
+        * Test 0x31 (Core Buttons + Accel)
 
   * As it's meant to recreate the original Wii remote, the Wii Motion Control Plus
   * (gyroscope values) will not be supported, despite the MPU6050 having the ability
@@ -78,12 +78,12 @@ static uint8_t HIDD[] = {
         0x75, 0x08, //Report Size (8)
 
         // ---------- Output reports: Host -> Wiimote ---------- //
-        WIIMOTE_REPORT(0x10, 1,  0x91), //Rumble
-        WIIMOTE_REPORT(0x11, 1,  0x91), //LEDs
-        WIIMOTE_REPORT(0x12, 2,  0x91), //Data Reporting Mode (DRM select)
+        WIIMOTE_REPORT(0x10, 1,  0x91), //Rumble -> In Progress
+        WIIMOTE_REPORT(0x11, 1,  0x91), //LEDs -> In Progress
+        WIIMOTE_REPORT(0x12, 2,  0x91), //Data Reporting Mode (DRM select) -> In Progress
         WIIMOTE_REPORT(0x13, 1,  0x91), //IR Camera Enable
         WIIMOTE_REPORT(0x14, 1,  0x91), //Speaker Enable
-        WIIMOTE_REPORT(0x15, 1,  0x91), //Status Request
+        WIIMOTE_REPORT(0x15, 1,  0x91), //Status Request -> In Progress
         WIIMOTE_REPORT(0x16, 21, 0x91), //Write Memory/Registers
         WIIMOTE_REPORT(0x17, 6,  0x91), //Read Memory/Registers
         WIIMOTE_REPORT(0x18, 21, 0x91), //Speaker Data
@@ -172,6 +172,40 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
     }
 }
 
+// ---------- Output Report ---------- //
+static void handle_output_report(uint8_t report_id, const uint8_t *data, uint16_t length) {
+    if (length < 1) {
+        return;
+    }
+    uint8_t common_byte = data[0];
+    gamepad_set_rumble((common_byte & 0x01) != 0); //unchanging across all output reports
+
+    switch(report_id) {
+        case 0x10:
+            break;
+        case 0x11:
+            gamepad_set_leds(common_byte);
+            break;
+        case 0x12:
+            if (length >= 2) {
+                gamepad_set_drm_mode(data[1]);
+            }
+            break;
+        case 0x15:
+            ESP_LOGI(TAG, "Host requested status report");
+            gamepad_send_status_report();
+            ESP_LOGI(TAG, "Status report sent");
+            break;
+        default:
+            break;
+    }
+
+    if (common_byte & 0x02) { // host explicitly requested an acknowledgement
+        ESP_LOGI(TAG, "Host requested acknowledgement");
+        gamepad_send_acknowledgement(report_id, 0x00);
+    }
+}
+
 // ---------- HID Callback ---------- //
 void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
 
@@ -243,22 +277,6 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
             send_gamepad_last_report();
             break;
         case ESP_HIDD_SET_REPORT_EVT: {
-            // Logs each output report from the host so the wiimote protocol
-            // is exposed and can be implemented easier, instead of just guessing
-            // where it fails or what the bytes mean.
-            const uint8_t *desc = param -> set_report.data;
-            uint16_t len = param -> set_report.len;
-            char hex[64] = {0};
-            int position = 0;
-            for (int i = 0; i < len && position < (int) sizeof(hex) - 3; i++) {
-                position += snprintf(hex + position, sizeof(hex) - position, "%02x ", desc[i]);
-            }
-            ESP_LOGW(TAG, "SET_REPORT: type=%d id=0x%02x len=%d data=[ %s]",
-                     param->set_report.report_type, param->set_report.report_id, len, hex);
-
-            if (param->set_report.report_id == 0x12 && len >= 2) {
-                gamepad_set_drm_mode(desc[1]);
-            }
             break;
         }
         case ESP_HIDD_INTR_DATA_EVT: {
@@ -274,9 +292,7 @@ void esp_bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
             ESP_LOGW(TAG, "INTR_DATA: id=0x%02x len=%d data=[ %s]",
                      param->intr_data.report_id, len, hex);
 
-            if (param->intr_data.report_id == 0x12 && len >= 2) {
-                gamepad_set_drm_mode(desc[1]);
-            }
+            handle_output_report(param -> intr_data.report_id, desc, len);
             break;
         }
         case ESP_HIDD_SEND_REPORT_EVT:

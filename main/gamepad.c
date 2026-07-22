@@ -31,9 +31,12 @@ static uint8_t           buffer[GAMEPAD_REPORT_SIZE] = {0};
 
 // Real Wiimotes default to Core Buttons only (0x30) and switch to a
 // different mode when a game requests it through output mode 0x12.
-static volatile uint8_t drm_mode = REPORT_ID_0x30;
-static uint8_t           last_report_id  = REPORT_ID_0x30;
-static uint8_t           last_report_len = REPORT_ID_0x30;
+static volatile uint8_t drm_mode = 0x30;
+static uint8_t last_report_id  = 0x30;
+static uint8_t last_report_len = 0x30;
+
+static uint8_t led_state = 0;
+static bool rumble_state = false;
 
 // ---------- Connection State ---------- //
 /**
@@ -56,16 +59,58 @@ void gamepad_set_connected(bool status)
  */
 void gamepad_set_drm_mode(uint8_t mode) {
     switch (mode) {
-        case REPORT_ID_0x30:
-        case REPORT_ID_0x31:
+        case 0x30:
+        case 0x31:
             drm_mode = mode;
             ESP_LOGI(TAG, "Host requested 0x%02x DRM mode (implemented)", mode);
             break;
         default:
             ESP_LOGW(TAG, "Host requested unimplemented DRM mode 0x%02x", mode);
-            drm_mode = REPORT_ID_0x31;
+            drm_mode = 0x31;
             break;
     }
+}
+/**
+ * TODO: Elaborate
+ * @param common_byte
+ */
+void gamepad_set_leds(uint8_t common_byte) {
+    led_state = common_byte & LED_ALL;
+    ESP_LOGI(TAG, "LEDs set: 0x%02X", led_state);
+}
+
+void gamepad_set_rumble(bool enabled) {
+    rumble_state = enabled;
+    if (enabled) {
+        ESP_LOGI(TAG, "Rumble: ON");
+    }
+    else {
+        ESP_LOGI(TAG, "Rumble: OFF");
+    }
+    //TODO: Add actual rumble motor code here
+}
+
+void gamepad_send_status_report() {
+    uint8_t report[REPORT_SIZE_0x20] = {0};
+    report[0] = 0x00; //BB1
+    report[1] = 0x00; //BB2
+    report[2] = led_state;
+    report[3] = 0x00; //unused
+    report[4] = 0x00; //unused
+    report[5] = 0xFF; //battery level: report as full
+
+    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x20, REPORT_SIZE_0x20, report);
+    ESP_LOGI(TAG, "Sent status report (0x20): LF=0x%02X", report[2]);
+}
+
+void gamepad_send_acknowledgement(uint8_t report_id, uint8_t error) {
+    uint8_t report[REPORT_SIZE_0x22] = {0};
+    report[0] = 0x00; //BB1
+    report[1] = 0x00; //BB2
+    report[2] = report_id;
+    report[3] = error;
+    esp_bt_hid_device_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, 0x20, REPORT_SIZE_0x20, report);
+    ESP_LOGI(TAG, "Sent acknowledgement (0x22): LF=0x%02X, error flag = %d", report_id, error);
 }
 
 /**
@@ -111,10 +156,10 @@ static void send_gamepad_report(uint8_t bb1, uint8_t bb2, uint16_t x10, uint16_t
     uint8_t report_id;
     uint8_t report_len;
 
-    if (drm_mode == REPORT_ID_0x30) {
+    if (drm_mode == 0x30) {
         buffer[0] = bb1;
         buffer[1] = bb2;
-        report_id = REPORT_ID_0x30;
+        report_id = 0x30;
         report_len = REPORT_SIZE_0x30;
     }
     else {
@@ -135,7 +180,7 @@ static void send_gamepad_report(uint8_t bb1, uint8_t bb2, uint16_t x10, uint16_t
         buffer[3] = y_msb;
         buffer[4] = z_msb;
 
-        report_id = REPORT_ID_0x31;
+        report_id = 0x31;
         report_len = REPORT_SIZE_0x31;
     }
     last_report_id  = report_id;
